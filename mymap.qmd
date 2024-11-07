@@ -1,0 +1,237 @@
+---
+title: "Mapping Median Age in Europe"
+author: "Derrick Baruga"
+output: html_document
+---
+
+# Install and Load Required Packages
+
+```{r}
+# Install 'remotes' package if not already installed
+if (!require(remotes)) install.packages("remotes")
+
+# Install 'htmltools' if not already installed
+if (!require(htmltools)) install.packages("htmltools")
+
+# Load the package
+library(htmltools)
+
+# Install 'restatapi' from GitHub with force = TRUE
+remotes::install_github("eurostat/restatapi", force = TRUE)
+
+# List of required packages
+libs <- c(
+    "restatapi",
+    "tidyverse",
+    "giscoR",
+    "sf",
+    "classInt",
+    "leaflet"
+)
+
+# Install any missing packages
+installed_libs <- libs %in% rownames(installed.packages())
+if (any(installed_libs == FALSE)) {
+    install.packages(libs[!installed_libs])
+}
+
+# Load packages
+invisible(lapply(libs, library, character.only = TRUE))
+```
+
+# Get NUTS and Country Boundaries
+
+```{r}
+# Get NUTS3 level spatial data
+nuts3_sf <- giscoR::gisco_get_nuts(
+    nuts_level = "3",
+    resolution = "3",
+    year = "2021"
+)
+
+# Get country boundaries for Europe and Asia
+countries_sf <- giscoR::gisco_get_countries(
+    resolution = "3",
+    region = c("Asia", "Europe")
+)
+```
+
+# Filter Countries
+
+```{r}
+# List of non-EU countries
+non_eu_list <- c(
+    "AM", "AZ", "BA",
+    "BY", "GE", "MD",
+    "RU", "UA", "XK"
+)
+
+# List of EU countries from NUTS3 data
+eu_list <- unique(nuts3_sf$CNTR_CODE)
+
+# Filter EU countries
+eu_sf <- countries_sf %>%
+    filter(CNTR_ID %in% eu_list)
+
+# Filter non-EU countries
+non_eu_sf <- countries_sf %>%
+    filter(CNTR_ID %in% non_eu_list)
+```
+
+# Retrieve Median Age Data
+
+```{r}
+# Get median age data from Eurostat
+indicator_df <- restatapi::get_eurostat_data(
+    id = "demo_r_pjanind3",
+    filters = c("MEDAGEPOP", "YR"),
+    date_filter = c(2021:2022),
+    exact_match = TRUE,
+    label = FALSE
+)
+
+# View the first few rows
+head(indicator_df)
+```
+
+# Filter and Prepare Median Age Data
+
+```{r}
+# Select relevant columns and rename
+indicator_filtered_df <- indicator_df %>%
+    select(geo, time, values) %>%
+    rename("NUTS_ID" = "geo")
+
+# Convert data to wide format
+indicator_wide_df <- indicator_filtered_df %>%
+    pivot_wider(
+        names_from = time,
+        values_from = values
+    )
+
+# Replace missing values in 2022 with 2021 data
+indicator_df_final <- indicator_wide_df %>%
+    mutate(
+        values = if_else(
+            is.na(`2022`),
+            `2021`,
+            `2022`
+        )
+    ) %>%
+    select(NUTS_ID, values)
+
+# View the prepared data
+head(indicator_df_final)
+```
+
+# Merge Spatial Data with Median Age Data
+
+```{r}
+# Merge NUTS3 spatial data with median age data
+mapping_sf <- nuts3_sf %>%
+    left_join(
+        indicator_df_final,
+        by = "NUTS_ID"
+    )
+
+# View the merged data
+head(mapping_sf)
+```
+
+# Transform Spatial Data to WGS84
+
+```{r}
+# Transform mapping_sf to WGS84 (EPSG:4326) for leaflet
+mapping_sf_wgs84 <- st_transform(mapping_sf, crs = 4326)
+
+# Transform country boundaries to WGS84
+eu_sf_wgs84 <- st_transform(eu_sf, crs = 4326)
+non_eu_sf_wgs84 <- st_transform(non_eu_sf, crs = 4326)
+```
+
+# Create the Interactive Map
+
+```{r}
+# Define color palette
+pal <- colorNumeric(
+    palette = "viridis",
+    domain = mapping_sf_wgs84$values,
+    na.color = "transparent",
+    reverse = TRUE
+)
+
+# Create labels for tooltips
+mapping_sf_wgs84 <- mapping_sf_wgs84 %>%
+    mutate(
+        label = paste0(
+            "<strong>", NUTS_NAME, "</strong><br/>",
+            "Median Age: ", round(values, 1), " years"
+        )
+    )
+
+# Create the leaflet map
+leaflet() %>%
+    # Add base tiles
+    addProviderTiles(providers$CartoDB.Positron) %>%
+    # Add non-EU countries
+    addPolygons(
+        data = non_eu_sf_wgs84,
+        fillColor = "grey80",
+        color = "white",
+        weight = 0.5,
+        opacity = 1,
+        fillOpacity = 0.7,
+        group = "Non-EU Countries",
+        highlightOptions = highlightOptions(
+            weight = 2,
+            color = "#666",
+            fillOpacity = 0.7,
+            bringToFront = TRUE
+        )
+    ) %>%
+    # Add EU countries without data
+    addPolygons(
+        data = eu_sf_wgs84,
+        fillColor = "grey80",
+        color = "white",
+        weight = 0.5,
+        opacity = 1,
+        fillOpacity = 0.7,
+        group = "EU Countries",
+        highlightOptions = highlightOptions(
+            weight = 2,
+            color = "#666",
+            fillOpacity = 0.7,
+            bringToFront = TRUE
+        )
+    ) %>%
+    # Add median age data
+    addPolygons(
+        data = mapping_sf_wgs84,
+        fillColor = ~pal(values),
+        color = "white",
+        weight = 0.5,
+        opacity = 1,
+        fillOpacity = 0.7,
+        highlightOptions = highlightOptions(
+            weight = 2,
+            color = "#666",
+            fillOpacity = 0.7,
+            bringToFront = TRUE
+        ),
+        label = ~lapply(label, HTML),
+        popup = ~lapply(label, HTML),
+        group = "Median Age"
+    ) %>%
+    # Add legend
+    addLegend(
+        pal = pal,
+        values = mapping_sf_wgs84$values,
+        opacity = 0.7,
+        title = "Median Age (Years)",
+        position = "bottomright"
+    ) %>%
+    # Set initial view
+    setView(lng = 10, lat = 52, zoom = 4)
+```
+
