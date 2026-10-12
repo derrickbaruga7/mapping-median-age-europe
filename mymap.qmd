@@ -1,41 +1,20 @@
 ---
 title: "Mapping Median Age in Europe"
 author: "Derrick Baruga"
-output: html_document
+format: html
 ---
 
-# Install and Load Required Packages
+# Load Required Packages
+
+Install dependencies once with `source("setup.R")` before rendering.
 
 ```{r}
-# Install 'remotes' package if not already installed
-if (!require(remotes)) install.packages("remotes")
-
-# Install 'htmltools' if not already installed
-if (!require(htmltools)) install.packages("htmltools")
-
-# Load the package
-library(htmltools)
-
-# Install 'restatapi' from GitHub with force = TRUE
-remotes::install_github("eurostat/restatapi", force = TRUE)
-
-# List of required packages
-libs <- c(
-    "restatapi",
-    "tidyverse",
-    "giscoR",
-    "sf",
-    "classInt",
-    "leaflet"
-)
-
-# Install any missing packages
-installed_libs <- libs %in% rownames(installed.packages())
-if (any(installed_libs == FALSE)) {
-    install.packages(libs[!installed_libs])
+libs <- c("restatapi", "tidyverse", "giscoR", "sf", "leaflet", "htmltools")
+missing <- libs[!vapply(libs, requireNamespace, logical(1), quietly = TRUE)]
+if (length(missing)) {
+    stop("Missing packages: ", paste(missing, collapse = ", "),
+         ". Run source('setup.R') before rendering.")
 }
-
-# Load packages
 invisible(lapply(libs, library, character.only = TRUE))
 ```
 
